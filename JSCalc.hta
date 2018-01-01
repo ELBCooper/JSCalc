@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<title>JavaScript Тренажёр</title>
+
+<HTA:APPLICATION
+ ID="JS_Calc"
+ APPLICATIONNAME="JavaScript Trainer"
+ SCROLL="yes"
+ SCROLLFLAT="no"
+ SINGLEINSTANCE="yes"
+ ICON="%SystemRoot%/system32/narrator.exe"
+ VERSION="1.13"
+>
+
+<HEAD>
+<meta http-equiv="X-UA-Compatible" content="IE=8"/>
+<!-- IE8 mode, максимум, иначе не берет GetObject] -->
+<link rel="stylesheet" href="JSCalc.css" type="text/css">
+
+<!-- see jscalc.notes -->
+<script language="JScript"></script>
+<script language="VBScript" src="..\HTALib\COMMON.vbs"></script>
+<script language="VBScript" src="..\HTALib\ByteArray_inc.vbs"></script>
+<script src="..\HTALib\ByteArray_inc.js"></script>
+<script src="..\HTALib\COMMON.js"></script>
+<script src="..\HTALib\HTML.js"></script>
+<script src="..\HTALib\FSO.js"></script>
+<script src="..\HTALib\XLS.js"></script>
+<script src="..\HTALib\AD.js"></script>
+<script src="..\HTALib\ado_stream.js"></script>
+<script src="..\HTALib\adodb.js"></script>
+<script src="..\HTALib\WMI.js"></script>
+<script src="..\HTALib\providers.js"></script>
+
+<SCRIPT LANGUAGE="JScript">
+
+//Создадим потенциально нужные объекты
+var WshNet = new ActiveXObject("Wscript.Network");
+var WMI = _oWMI_i;
+
+var Dictionary = ReadIni();
+//Следующие переменные потенциально читаются в ReadIni
+
+var $cFileOut = Default('$cFileOut',ScriptName()+'.log');
+// При задании имени файла - вывод копируется и в него
+
+var $cFileApp = Default('$cFileApp', 1);
+// Если = 1 файл $cFileOut дописывается, иначе переписывается
+
+try { eval(File2Str('JSCalc.plugin')); }
+catch (e) { alert('Ошибка разбора JSCalc.plugin'); }
+
+//var $clpBoard = window.clipboardData;
+var $aHist=[];
+var $iHist = -1;
+var $cResFull, $cResClear;
+
+window.onclose = endWork;
+
+if (!window.setImmediate) window.setImmediate = (function() {
+  var head = { }, tail = head; // очередь вызовов, 1-связный список
+
+  var ID = Math.random(); // уникальный идентификатор
+
+  function onmessage(e) {
+    if(e.data != ID) return; // не наше сообщение
+    head = head.next;
+    var func = head.func;
+    delete head.func;
+    func();
+  }
+
+  if(window.addEventListener) { // IE9+, другие браузеры
+	window.addEventListener('message', onmessage);
+  } else { // IE8
+	window.attachEvent( 'onmessage', onmessage );
+  }
+
+  return function(func) {
+	tail = tail.next = { func: func };
+	window.postMessage(ID, "*");
+  };
+}());
+
+document.title += '. v.'+ JS_Calc.VERSION;
+</script>
+</HEAD>
+
+<BODY class=grad>
+Определены объекты: FSO, WshShell, WshNet, ShellApp, WMI, AD (objRootDSE, ADsSec), oXLS, Dictionary
+<br>Примеры: 2+2, FSO.Drives, arr=[1,2,3], user=WshNet.UserName, AD_Object('xe6754').description, test.js ...<br><br>
+
+<i class=blue>Введите выражение для оценки и нажмите Enter.</i> (Ctrl+Up, Ctrl+Dn - история ввода)<br>
+<input type="text" autofocus id="getExpr" name="getExpr" size=120>
+<span id='showCode'></span>
+<br>Число повторов <input type="text" id="getNum" size=6 value=1>
+<br>
+<p>
+История ввода:
+<select name="srchHist" type="text" id="srchHist" style="width:120;"
+onchange='selectStat()' disabled>
+</select>
+<span id='showKey' class='showKeys'></span>
+<br><span id='showWait' class='blue'></span>
+<hr>
+<div class='padded'>
+<br><span id='showRes' class='padded'></span>
+</div>
+<div class='grad'><br>
+<SCRIPT language="jscript">
+//Иначе фокус не устанавливается
+window.setTimeout(function () { document.getElementById('getExpr').focus();
+}, 0);
+
+
+function JSCalc() {
+var cQuery = getValue('getExpr');
+if (!cQuery) return;
+//var cQuery = getExpr.Value; //почему-то не работает
+var nRep = Number(getValue('getNum'));
+if ( nRep != nRep || nRep < 1) {
+	nRep = 1;
+	getNum.value = 1;
+}
+
+var ret = 'Запрос: '+cQuery.bold();
+var res, resC, retF, cType, cD, vbTN, vbTCode, ctDescr, t0, t1, i;
+
+waiting();
+/*
+if (nRep > 1) {
+	WshShell.Run('cmd /c echo', 0, 1);	//Так точно есть прерывание
+}
+*/
+
+try {
+	t0 = new Date();
+
+	resC = evalIt(nRep, cQuery);
+
+	if (nRep > 1) { ret += ', ' + nRep + ' повторов.'; }
+
+	res = resC;
+
+	t1 = new Date();
+	cType = typeof resC;
+	vbTN = VBTypeName(resC);
+	vbTCode = VBVarType(resC);
+
+	ctDescr = ' (тип: ' + cType.bold() + ' (JScript), ' +
+		  vbTN.bold() + ' (VB TypeName), '+
+		  (''+vbTCode).bold() + ' (VB VarType) )';
+
+	if (cType == 'unknown') {
+		if (vbTN == 'Variant()') {
+			resC = res.toArray();
+			if (resC.length > 0 && VBTypeName(resC[0]) == 'Byte()') {
+				resC = resC.map( function(el) {
+						return ba_ToHexStr(el);
+						});
+			}
+
+			try {
+			  res =	'Массив (vbArray, длина: <b>' + resC.length +
+				'</b>) =<br/>' + resC.join(_CR);
+			}
+			catch (e) {
+			  res =	'Массив (vbArray, длина: <b>' + resC.length +
+				'</b>) =<br/>' + resC;
+			}
+		}
+		else if (vbTN == 'Byte()') {
+			resC = ba_ToHexStr(res,' ');
+			res =	'Байтовый массив, длина: <b>' + (resC.length + 1)/3 +
+				'</b>) =' +_CR + resC;
+		}
+		else { res = 'Неизвестный тип'; }
+	}
+	else if (cType == 'object') {
+		try {
+		  if (res === null) {
+			res = 'null';
+		  }
+		  else 	if (isArray(resC)) {
+			cD = (inStr(typeof resC[0],'string_object')) ? _CR : ', ';
+			res =	'Массив (длина: <b>'+ resC.length +
+				'</b>) =' + _CR + resC.join(cD);
+		  }
+		  else {res = ListObj(resC);}
+		}
+		catch (e) { res = 'Object, структура неизвестна'; }
+	}
+	else if (cType == 'string') {
+		res = showLen(resC) +' =' + _CR + '"' + resC + '"';
+	}
+	else if (cType == 'number') {
+		res =	'Dec: ' + resC.toString().bold() + _CR +
+			'Hex: ' + resC.toString(16).bold() + _CR +
+			'Bin: ' + resC.toString(2).bold();
+	}
+	else if (cType == 'function') {
+		cD = resC.toString();
+		res = Before('{' ,After('function', cD));
+		if (res=='()') res = 'Неименованная функция';
+		if (inStr('[native', cD) ) res += ' (системная)';
+		else res += ' '+showLen(cD);
+	}
+	ret += _CR + 'Результат '+ ctDescr + '  =' + _CR + res;
+
+	if ( (t1 - t0) > 100) {
+		ret += _CR + 'Время выполнения: ' + (t1 - t0)*0.001 + ' сек.';
+	}
+	$cResFull = removeTags(ret);
+	$cResClear = resC;
+
+  ret += '<br><br><INPUT id=resToBuf type=button value="Весь результат в буфер"' +
+	'onclick="setBuffer(1)">' +
+	addNBSP(10) +
+	'<INPUT id=resCToBuf type=button value="Чистый результат в буфер"' +
+	'onclick="setBuffer(2)">';
+
+}
+catch (e) {
+	ret += showException(e);
+	$cResFull = removeTags(ret);
+}
+
+$iHist = $aHist.addUniq(cQuery);
+if ($iHist == $aHist.length-1) {
+	srchHist.options[$iHist] = new Option(cQuery, cQuery);
+	if ($iHist > 0) srchHist.disabled = false;
+}
+srchHist.selectedIndex = $iHist;
+Write2File($cFileOut, ($cFileApp>0), '\n\n'+$cResFull);
+
+setInner('showWait','');
+setInner('showRes', ret);
+}
+
+function waiting() {
+setInner('showWait', 'Работаем...');
+//if (showWait.innerHTML != 'Работаем...') setImmediate(waiting)
+}
+
+
+function evalIt(nRep, cQuery) {
+var i, xR;
+waiting();
+if (cQuery.slice(-3).toLowerCase()=='.js') {
+	cQuery = File2Str(cQuery);
+}
+for (i=1; i <= nRep; i+=1) {
+	xR = eval(cQuery);
+}
+return xR;
+}
+
+function setBuffer(what) {
+if (what == 1) setTextBuf($cResFull);
+else if (what == 2 && !setTextBuf($cResClear) ) {
+  infoMsg('Результат данного типа не может быть записан в буфер',0,'Неудача');
+}
+}
+
+function removeTags(cText) {
+cText = StrTran(cText,'<br/>','\n');
+cText = cText.replace(/<[\/bBrRHh]+>/g,'');
+return cText;
+}
+
+function showLen(resC) {
+var nL = String(resC.length);
+var cL = nL.slice(-1);
+if ( inStr(cL, '056789') ) cL = 'ов';
+else if (cL == '1') cL = '';
+else cL = 'а';
+return '(длина - <b>' + nL + '</b> символ' + cL +')';
+}
+
+function selectStat() {
+if (srchHist.selectedIndex != -1) { setValue("getExpr", srchHist.value); }
+}
+
+document.onkeydown=function() {
+setInner("showKey", 'keyCode: ' + ('' + event.keyCode).bold());
+}
+
+function showCode() {
+try {
+  var nP = getCursorPos(getExpr) - 1;
+  if (nP < 0) return;
+  var nC = getExpr.value.charCodeAt(nP);
+  setInner("showCode",	'Pos: ' + ('' + nP).bold() +
+			' Char: "' + getExpr.value[nP].bold() +
+			'" Code: '+ nC.toString().bold() +
+			' (hex: ' + nC.toString(16).bold() +')' );
+}
+catch (e) {}
+}
+
+getExpr.onkeyup = getExpr.onmouseup = showCode;
+//При задании getExpr.onfocus вылетает ошибка после первого вызова объекта
+//html, н-р getExpr, document.body etc.
+
+/** События строки ввода */
+getExpr.onkeydown=function() {	 // горячие клавиши
+var acs = 100*event.altKey + 10*event.ctrlKey + 1*event.shiftKey;
+var cB;
+var nK = event.keyCode;
+
+if (nK == 13) {
+	JSCalc();
+}
+else if (nK == 38 && acs == 10) {	//Ctrl+Up
+	if ( ($iHist > -1) && ($aHist.length > 1) && (acs == 10) ) {
+		$iHist = ($iHist > 0) ? $iHist - 1 : $aHist.length-1;
+		getExpr.value = $aHist[$iHist];
+	}
+}
+else if (nK == 40 && acs == 10) {	//Ctrl+Dn
+	if ( ($iHist > -1) && ($aHist.length > 1) && (acs == 10) ) {
+		$iHist = ($iHist < ($aHist.length-1) ) ? $iHist + 1 : 0;
+		getExpr.value = $aHist[$iHist];
+	}
+}
+else if ( (nK == 57 || nK == 48) && acs==100)  {	//Alt + ( || )
+	insInto(this, '()', nK == 48);
+	return false;
+}
+else if ( (nK == 219 || nK == 221) && acs==100)  {	//Alt + []
+	insInto(this, '[]', nK == 221);
+	return false;
+}
+else if ( (nK == 219 || nK == 221) && acs==101)  {	//Alt + {}
+	insInto(this, '{}', nK == 221);
+	return false;
+}
+else if ( nK == 222 && acs==100)  {	//Alt + '
+	insInto(this, "''", 1);
+	return false;
+}
+else if ( nK == 222 && acs==101)  {	//Alt + "
+	insInto(this, '""', 1);
+	return false;
+}
+else if ((nK == 86 || nK == 45) && (acs == 110)) {////Alt+Ctrl+V полностью заместить
+	getExpr.value = getTextBuf();
+	return false;
+}
+else if (nK == 88 && acs == 11) {//Ctrl+Shift+X
+	getExpr.value = XLat(getExpr.value);
+}
+//showCode();
+} //getExpr.onkeydown
+
+
+getNum.onkeydown=function(){
+if (event.keyCode == 13) {JSCalc(); }
+}
+
+/**
+* События истории ввода.
+* Определено удаление и передвижение.
+* С единственным значением в истории ничего не делаем.
+*/
+srchHist.onkeydown=function() {
+if ($aHist.length < 2) {
+	return false;
+}
+var acs = 100*event.altKey + 10*event.ctrlKey + 1*event.shiftKey;
+var nK = event.keyCode;
+var crtIndex = srchHist.selectedIndex;
+var optCrt, optChg;
+
+if ( (nK == 46 || nK == 68) && acs==10) {	//Ctrl+D, Ctrl+Del
+	$aHist.splice( crtIndex, 1);
+	srchHist.remove( crtIndex );
+	if (crtIndex > 1) {
+		srchHist.selectedIndex = crtIndex - 1;
+	}
+	return false;
+}
+
+else if (nK == 38 && acs == 10) {	//Ctrl+Up
+	if ( crtIndex > 0 ) {
+		optCrt = srchHist.options[crtIndex];
+		optChg = srchHist.options[crtIndex - 1];
+		srchHist.insertBefore(optCrt, optChg);
+		$aHist[crtIndex] = srchHist.options[crtIndex].value;
+		$aHist[crtIndex - 1] = srchHist.options[crtIndex - 1].value;
+	}
+	return false;
+}
+else if (nK == 40 && acs == 10) {	//Ctrl+Dn
+	if ( crtIndex < $aHist.length-1 ) {
+		optCrt = srchHist.options[crtIndex];
+		optChg = srchHist.options[crtIndex + 1];
+		srchHist.insertBefore(optChg, optCrt);
+		$aHist[crtIndex] = srchHist.options[crtIndex].value;
+		$aHist[crtIndex + 1] = srchHist.options[crtIndex + 1].value;
+	}
+	return false;
+}
+
+} //srchHist.onkeydown
+
+
+function insInto(o, cIns, lInside) {
+var nP = getCursorPos(o);
+o.value = o.value.slice(0, nP) + cIns + o.value.slice(nP);
+
+setCursorPos(o, nP + ((lInside) ? 1 : cIns.length));
+}
+
+</SCRIPT>
+
+</HTML>

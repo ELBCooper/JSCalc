@@ -1,0 +1,30 @@
+BODY {
+ MARGIN-TOP: 10px; MARGIN-LEFT: 10px;
+ FONT-SIZE: 14px; FONT-FAMILY: Verdana, Arial, Helvetica; 
+}
+
+.padded {
+ background-color:infobackground;
+}
+
+.grad {
+ background: #FFFFFF;
+ filter:progid:DXImageTransform.Microsoft.Gradient (GradientType=1, StartColorStr='#FFFFFF', EndColorStr='#6AA78A');
+}
+
+.showKeys {
+ position: absolute;
+ right: 116px; 
+ color: blue;
+/* color: #ACA;*/
+}
+
+
+input:focus {
+  background: #FA6;
+  outline: none;  /* убрать рамку */
+}
+
+.blue {
+color: blue;
+}
